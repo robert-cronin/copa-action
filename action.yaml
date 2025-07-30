@@ -27,6 +27,10 @@ inputs:
     default: "openvex"
   custom-socket:
     description: "Custom socket address if setting up containerd image store"
+  max_retries:
+    description: "Max retries on timeout error"
+    required: false
+    default: 0
 outputs:
   patched-image:
     description: 'Image reference of patched image'
@@ -60,4 +64,4 @@ runs:
         fi
 
         # run copa-action based on inputs
-        docker run --net=host --mount=type=bind,source=$(pwd),target=/data --mount=type=bind,source="$socket",target="/var/run/docker.sock" --mount=type=bind,source=$GITHUB_OUTPUT,target=$GITHUB_OUTPUT -e GITHUB_OUTPUT --name=copa-action "ghcr.io/project-copacetic/copa-action:v$version" ${{ inputs.image }} ${{ inputs.image-report }} ${{ inputs.patched-tag }} ${{ inputs.timeout }} ${connection} ${{ inputs.format }} ${{ inputs.output }}
+        docker run --net=host --mount=type=bind,source=$(pwd),target=/data --mount=type=bind,source="$socket",target="/var/run/docker.sock" --mount=type=bind,source=$GITHUB_OUTPUT,target=$GITHUB_OUTPUT -e GITHUB_OUTPUT --name=copa-action "ghcr.io/project-copacetic/copa-action:v$version" ${{ inputs.image }} ${{ inputs.image-report }} ${{ inputs.patched-tag }} ${{ inputs.timeout }} ${connection} ${{ inputs.format }} ${{ inputs.output }} ${{ inputs.max_retries }}

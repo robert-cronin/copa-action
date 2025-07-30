@@ -9,6 +9,7 @@ timeout=$4
 connection_format=$5
 format=$6
 output_file=$7
+max_retries=${8:-0}
 
 # parse image into image name
 image_no_tag=$(echo "$image" | cut -d':' -f1)
@@ -39,12 +40,41 @@ case "$connection_format" in
     ;;
 esac
 
+patch_image() {
+if copa patch -i "$image" -r ./data/"$report" -t "$patched_tag" $connection --timeout $timeout $output
+    then
+        patched_image="$image_no_tag:$patched_tag"
+        echo "patched-image=$patched_image" >> "$GITHUB_OUTPUT"
+        return 0
+    else
+        return 1
+    fi
+}
+
 # run copa to patch image
-if copa patch -i "$image" -r ./data/"$report" -t "$patched_tag" $connection --timeout $timeout $output;
+if [ "$max_retries" -eq 0 ]
 then
-    patched_image="$image_no_tag:$patched_tag"
-    echo "patched-image=$patched_image" >> "$GITHUB_OUTPUT"
+    if ! patch_image
+    then
+        echo "Error patching image $image with copa"
+        exit 1
+    fi
 else
-    echo "Error patching image $image with copa"
-    exit 1
+    retries=0
+    while [ "$retries" -lt "$max_retries" ]
+    do
+        if patch_image
+        then
+            break
+        else
+            retries=$((retries + 1))
+            if [ "$retries" -eq "$max_retries" ]
+            then
+                echo "Error patching image $image with copa"
+                exit 1
+            else
+                echo "WARNING: Attempt $retries failed. Retrying..."
+            fi
+        fi
+    done
 fi
