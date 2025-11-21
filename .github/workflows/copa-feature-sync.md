@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
+  pull_request:
+    types: [labeled]
+    names: ["test"]
 permissions:
   contents: read
   actions: read
