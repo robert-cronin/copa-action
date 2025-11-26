@@ -38,7 +38,7 @@ tracker-id: copa-sync-2024
 github-token: ${{ secrets.GITHUB_TOKEN }}
 engine:
   id: copilot
-  model: gpt-5.1-codex
+  model: claude-opus-4.5
 network: defaults
 steps:
   - name: Setup BATS
