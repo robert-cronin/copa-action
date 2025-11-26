@@ -55,9 +55,9 @@ tools:
 env:
   COPA_REPO: project-copacetic/copacetic
   COPA_STATE_FILE: .github/agents/copa-sync-state.json
-  COPA_DISCUSSION_TITLE: "Copa Feature Sync - Release Tracker"
+  COPA_MIN_VERSION: "v0.6.0"
   BATS_VERSION: "1.11.1"
-  STATE_TEMPLATE: '{"last_release_tag":"","last_checked":"","notes":[]}'
+  STATE_TEMPLATE: '{"releases":{},"last_checked":"","min_version":"v0.6.0"}'
 strict: true
 ---
 
@@ -77,47 +77,67 @@ Keep this action and related integrations aligned with the latest Copacetic CLI 
 
 ## Phase Selection
 
-- Run release intelligence (next section) every time so you know what the latest Copacetic tag introduced.
-- Search discussions for `${{ env.COPA_DISCUSSION_TITLE }}` (ignore closed threads). If none exist, run **Phase 1** only and exit after creating the plan. If a discussion exists, proceed to **Phase 2**.
-- Always keep `${{ env.COPA_STATE_FILE }}` updated with the latest `last_release_tag`, ISO8601 `last_checked`, and a `notes` array where each feature has `feature`, `description`, `files`, and `status` (`pending`, `in-progress`, `done`, `blocked`).
+- Run release intelligence (next section) every time so you know which Copacetic releases exist and what each introduced.
+- Process releases sequentially starting from `${{ env.COPA_MIN_VERSION }}` (v0.6.0). Identify the oldest incomplete release (one with `pending` features or no discussion yet).
+- Construct a discussion title using the pattern `Copa Feature Sync - <tag>` (e.g., `Copa Feature Sync - v0.6.0`).
+- Search discussions for that title (ignore closed threads). If none exist for the target release, run **Phase 1** only and exit after creating the plan. If a discussion exists, proceed to **Phase 2**.
+- Always keep `${{ env.COPA_STATE_FILE }}` updated with a `releases` object keyed by tag, each containing `discussion_url`, `last_checked` (ISO8601), `previous_tag` (for diff reference), and a `features` array where each item has `feature`, `description`, `introduced_in`, `files`, and `status` (`pending`, `in-progress`, `done`, `blocked`).
 
 ## Release Intelligence (runs every phase)
 
-- Fetch the latest release from `${{ env.COPA_REPO }}` and capture `tag_name`, `html_url`, `body`, and `target_commitish`.
+- Fetch all releases from `${{ env.COPA_REPO }}` starting from `${{ env.COPA_MIN_VERSION }}` (v0.6.0) and capture `tag_name`, `html_url`, `body`, `published_at`, and `target_commitish` for each.
 - Bootstrap `${{ env.COPA_STATE_FILE }}` from `${{ env.STATE_TEMPLATE }}` if it does not exist yet.
-- If `last_release_tag` already matches the newest release and the backlog contains no `pending` work, emit a noop message that cites the confirming evidence and exit.
-- Clone (or fetch) `${{ env.COPA_REPO }}` locally if not present and check out the exact `tag_name` so you can diff files, confirm input defaults, and copy canonical docs straight from that release. Reuse the same checkout directory across runs when possible.
-- Parse release notes, the checked-out source tree, and documentation for new CLI flags, environment variables, behaviors, and integration-impacting changes. Add or update backlog entries so each feature includes a short name, description with links, target files (`action.yaml`, `README.md`, `test/test.bats`, etc.), and its current status (start with `pending`).
+- Process releases in ascending order (oldest first, starting with v0.6.0). Find the first release where `releases[tag_name]` either does not exist or has `pending` features remaining.
+- If all releases from v0.6.0 onward are complete (all features `done` or `blocked`), emit a noop message citing the latest tag and exit.
+- Clone (or fetch) `${{ env.COPA_REPO }}` locally if not present. Check out the exact `tag_name` being processed. Reuse the same checkout directory across runs when possible.
 
-## Phase 1 – Planning Discussion
+### Differential Feature Detection
 
-Run this phase only when `${{ env.COPA_DISCUSSION_TITLE }}` does not already exist. Once the discussion is created, stop so humans can review.
+When analyzing a release, identify only the **net-new features introduced in that specific version**:
 
-- Summarize repository testing/documentation posture and highlight the release deltas you just discovered.
-- Present a backlog table covering every `pending` feature from the state file, including impact, target files, and open questions.
-- Create a discussion body that includes clearly labeled sections: **Plan**, **Execution Checklist**, **Questions / Risks**, **How to Control this Workflow**, and **What Happens Next**. Reuse the control guidance from the Daily Test Improver workflow (commands such as `gh aw disable ...`, `gh aw enable ...`, `gh aw run ... --repeat <n>`, `gh aw logs ...`).
-- Use `safe-outputs.create-discussion` to publish the discussion, then store the resulting URL inside `${{ env.COPA_STATE_FILE }}` (e.g., under `discussion_url`).
+1. **For v0.6.0 (baseline)**: Compare against the action's current state. Any CLI flags, environment variables, or behaviors in v0.6.0 that the action does not yet support are features for v0.6.0's backlog.
+2. **For subsequent releases (v0.7.0+)**: Compare against the previous release's source tree using `git diff <prev_tag>..<current_tag>`. Only changes that appear in this diff belong to the current release's backlog.
+3. **Never duplicate features**: If feature X exists in both v0.6.0 and v0.7.0, it belongs only to v0.6.0's backlog. Feature Y introduced in v0.7.0 belongs only to v0.7.0.
+4. **Parse release notes for hints**: Release notes typically highlight what's new in each version; use them to validate differential detection.
+
+Add or update feature entries under `releases[tag_name].features` so each includes:
+- `feature`: Short unique name
+- `description`: What changed, with links to upstream commits/docs
+- `introduced_in`: The tag where this feature first appeared (for auditing)
+- `files`: Target files in this repo (`action.yaml`, `README.md`, `test/test.bats`, etc.)
+- `status`: `pending`, `in-progress`, `done`, or `blocked`
+
+## Phase 1 – Planning Discussion (per release)
+
+Run this phase only when a discussion titled `Copa Feature Sync - <tag>` does not already exist for the latest release. Once the discussion is created, stop so humans can review.
+
+- Summarize repository testing/documentation posture and highlight the release deltas discovered for this specific version.
+- Present a backlog table covering every `pending` feature from `releases[tag_name].features`, including impact, target files, and open questions.
+- Create a discussion body that includes clearly labeled sections: **Release Overview** (tag, date, link), **Plan**, **Execution Checklist**, **Questions / Risks**, **How to Control this Workflow**, and **What Happens Next**. Reuse the control guidance from the Daily Test Improver workflow (commands such as `gh aw disable ...`, `gh aw enable ...`, `gh aw run ... --repeat <n>`, `gh aw logs ...`).
+- Use `safe-outputs.create-discussion` to publish the discussion with title `Copa Feature Sync - <tag>`, then store the resulting URL inside `${{ env.COPA_STATE_FILE }}` under `releases[tag_name].discussion_url`.
 
 ## Backlog & State Management
 
-- Treat `${{ env.COPA_STATE_FILE }}` as the single source of truth. Keep entries sorted so the most recent release features appear first.
+- Treat `${{ env.COPA_STATE_FILE }}` as the single source of truth. The `releases` object is keyed by tag name, with each release containing its own `discussion_url`, `last_checked`, `previous_tag`, and `features` array.
+- Each feature entry includes `introduced_in` to record which release first added it—this prevents duplication across releases.
 - The state file lives in `${{ env.COPA_STATE_FILE }}` and is committed to the repo with blank defaults so the workflow can run immediately; keep it checked in after every update.
-- Ensure every backlog item appears both in the state file and in the discussion checklist so humans can track progress easily.
-- When status changes, update the state file and leave a comment on the discussion so reviewers have context.
+- Ensure every feature item appears both in the state file under its release and in that release's discussion checklist so humans can track progress easily.
+- When status changes, update the state file and leave a comment on the release-specific discussion so reviewers have context.
+- When all features for a release reach `done` or `blocked`, consider the release complete and note this in the discussion.
 
 ## Phase 2 – Feature Delivery Loop (single feature per run)
 
-Only execute this phase when the planning discussion already exists.
+Only execute this phase when the planning discussion for the latest release already exists.
 
-- Read the state file + discussion checklist to find the highest-priority feature whose status is neither `done` nor `blocked`.
+- Read the state file under `releases[tag_name].features` and the corresponding discussion checklist to find the highest-priority feature whose status is neither `done` nor `blocked`.
 - Mark that feature as `in-progress` inside `${{ env.COPA_STATE_FILE }}` before editing code.
 - Implement exclusively that feature. Update `action.yaml`, docs, and tests as required.
 - Validate your change (see Implementation Requirements) and capture evidence such as command output or links to release notes.
 - Decide which artifact to produce:
-  - Draft PR when code or docs change. Include the targeted backlog item, commands executed, validation performed, and remaining TODOs.
+  - Draft PR when code or docs change. Include the targeted feature item, the release tag, commands executed, validation performed, and remaining TODOs.
   - Issue when manual intervention or other repos block progress. Describe severity in the body even though labels are pre-set.
-- Post a concise comment to the planning discussion covering the release tag processed, the feature tackled (and whether it is `done`, `blocked`, or `needs-review`), plus links to PRs/issues and test output.
-- Update the state file entry to `done` (or `blocked`) with any relevant notes, commit all changes, and exit without touching additional backlog items.
+- Post a concise comment to the release-specific planning discussion covering the release tag processed, the feature tackled (and whether it is `done`, `blocked`, or `needs-review`), plus links to PRs/issues and test output.
+- Update the state file entry under `releases[tag_name].features` to `done` (or `blocked`) with any relevant notes, commit all changes, and exit without touching additional features.
 
 ## Implementation Requirements
 
@@ -129,15 +149,15 @@ Only execute this phase when the planning discussion already exists.
 
 ## Reporting & Outputs
 
-- **Discussion**: Phase 1 uses `safe-outputs.create-discussion`; Phase 2 uses `safe-outputs.add-comment` to provide run summaries and backlog status.
-- **Pull Requests**: Draft PRs must map to exactly one backlog item and include sections for release tag, files touched, validation proof, remaining gaps, and next steps.
-- **Issues**: Capture upstream blockers or cross-repo follow-ups, referencing the discussion and backlog entry.
-- **Noop**: When no action is required, emit a noop message that cites the release tag and state file hash or discussion comment.
+- **Discussion**: Phase 1 uses `safe-outputs.create-discussion` to create a release-specific discussion (titled `Copa Feature Sync - <tag>`); Phase 2 uses `safe-outputs.add-comment` to provide run summaries and feature status updates on that discussion.
+- **Pull Requests**: Draft PRs must map to exactly one feature from one release and include sections for release tag, files touched, validation proof, remaining gaps, and next steps.
+- **Issues**: Capture upstream blockers or cross-repo follow-ups, referencing the release-specific discussion and feature entry.
+- **Noop**: When no action is required, emit a noop message that cites the release tag and confirms all features are complete or that no new releases exist.
 
 ## Exit Criteria
 
-- `${{ env.COPA_STATE_FILE }}` reflects the latest release tag, timestamp, and updated backlog statuses.
-- The planning discussion exists and now contains either a refreshed checklist or a new comment from this run.
+- `${{ env.COPA_STATE_FILE }}` reflects the latest release under `releases[tag_name]` with updated timestamp and feature statuses.
+- A discussion titled `Copa Feature Sync - <tag>` exists for the latest release and contains either the initial checklist (Phase 1) or a new comment from this run (Phase 2).
 - Exactly one feature moved forward (to `done` or `blocked`) during Phase 2, or Phase 1 completed the discussion setup.
 - Tests were executed (or a logged issue explains why they could not run).
 

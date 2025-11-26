@@ -1,6 +1,5 @@
 {
-  "last_release_tag": "",
+  "releases": {},
   "last_checked": "",
-  "discussion_url": "",
-  "notes": []
+  "min_version": "v0.6.0"
 }
