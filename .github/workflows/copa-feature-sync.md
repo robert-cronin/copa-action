@@ -35,7 +35,6 @@ safe-outputs:
     discussion: true
   noop:
 tracker-id: copa-sync-2024
-github-token: ${{ secrets.GITHUB_TOKEN }}
 engine:
   id: copilot
   model: claude-opus-4.5
