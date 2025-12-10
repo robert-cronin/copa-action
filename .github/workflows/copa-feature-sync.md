@@ -4,9 +4,8 @@ on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
-  pull_request:
+  discussion:
     types: [labeled]
-    names: ["test"]
 permissions:
   contents: read
   actions: read
@@ -15,7 +14,7 @@ permissions:
   discussions: read
 runs-on: ubuntu-latest
 timeout-minutes: 30
-description: "Continuously align copa-action with the latest Copacetic CLI release."
+description: "Continuously align copa-action with the latest Copacetic CLI release. Processes ONE release per run, oldest first."
 roles: [admin, maintainer, write]
 safe-outputs:
   create-discussion: # needed to create planning discussion
@@ -24,13 +23,13 @@ safe-outputs:
   create-issue:
     title-prefix: "[copa-sync] "
     labels: [automation, needs-triage]
-    max: 2
+    max: 1
   create-pull-request:
     title-prefix: "[copa-sync] "
     labels: [automation, dependencies]
     draft: true
   add-comment:
-    max: 1
+    max: 2
     target: "*"
     discussion: true
   noop:
@@ -64,23 +63,43 @@ strict: true
 
 ## Mission
 
-Keep this action and related integrations aligned with the latest Copacetic CLI capabilities while ensuring reviewers see one focused feature change per run.
+Keep this action aligned with the latest Copacetic CLI capabilities by processing **ONE release at a time**, starting from the oldest unprocessed release.
+
+## CRITICAL: Strict Release Ordering
+
+**YOU MUST PROCESS RELEASES IN STRICT CHRONOLOGICAL ORDER (oldest first).**
+
+1. Start from `${{ env.COPA_MIN_VERSION }}` (v0.6.0)
+2. Check if v0.6.0 has a discussion - if not, create one and STOP
+3. Only after v0.6.0 is complete (all features `done` or `blocked`), move to v0.7.0
+4. Repeat for each subsequent release
+5. **NEVER skip ahead to newer releases**
+6. **NEVER process multiple releases in one run**
 
 ## Operating Constraints
 
-- Only use public information or files within this repository, `${{ env.COPA_REPO }}`, and any data you create.
-- Default to read-only actions unless a safe output provides explicit write access.
-- Ship or log exactly one feature gap per run; never bundle multiple backlog items together.
-- Link to upstream release artifacts or docs instead of copying them verbatim.
-- Use `safe-outputs.missing-tool` (auto-enabled) whenever repo tooling is insufficient.
+- Process exactly ONE release per workflow run - no exceptions
+- Create a discussion FIRST, before any PRs or issues
+- Only create PRs/issues AFTER the discussion is labeled "approved"
+- Only use public information or files within this repository and `${{ env.COPA_REPO }}`
+- Default to read-only actions unless a safe output provides explicit write access
 
 ## Phase Selection
 
-- Run release intelligence (next section) every time so you know which Copacetic releases exist and what each introduced.
-- Process releases sequentially starting from `${{ env.COPA_MIN_VERSION }}` (v0.6.0). Identify the oldest incomplete release (one with `pending` features or no discussion yet).
-- Construct a discussion title using the pattern `Copa Feature Sync - <tag>` (e.g., `Copa Feature Sync - v0.6.0`).
-- Search discussions for that title (ignore closed threads). If none exist for the target release, run **Phase 1** only and exit after creating the plan. If a discussion exists, proceed to **Phase 2**.
-- Always keep `${{ env.COPA_STATE_FILE }}` updated with a `releases` object keyed by tag, each containing `discussion_url`, `last_checked` (ISO8601), `previous_tag` (for diff reference), and a `features` array where each item has `feature`, `description`, `introduced_in`, `files`, and `status` (`pending`, `in-progress`, `done`, `blocked`).
+**Phase 1 (Planning)** - Runs on schedule or manual trigger:
+1. Fetch all releases from `${{ env.COPA_REPO }}`
+2. Find the OLDEST release that doesn't have a discussion yet
+3. Create a discussion for that ONE release
+4. STOP and wait for human review
+
+**Phase 2 (Implementation)** - Runs ONLY when "approved" label is added to a discussion:
+1. Read the discussion that was labeled
+2. Implement ONE feature from that release
+3. Create a draft PR
+4. Update the state file
+5. STOP
+
+Always keep `${{ env.COPA_STATE_FILE }}` updated with a `releases` object keyed by tag, each containing `discussion_url`, `last_checked` (ISO8601), `previous_tag` (for diff reference), and a `features` array where each item has `feature`, `description`, `introduced_in`, `files`, and `status` (`pending`, `in-progress`, `done`, `blocked`).
 
 ## Release Intelligence (runs every phase)
 
@@ -108,12 +127,29 @@ Add or update feature entries under `releases[tag_name].features` so each includ
 
 ## Phase 1 – Planning Discussion (per release)
 
-Run this phase only when a discussion titled `Copa Feature Sync - <tag>` does not already exist for the latest release. Once the discussion is created, stop so humans can review.
+**Trigger**: Schedule (daily at 6am UTC) or manual `workflow_dispatch`
 
-- Summarize repository testing/documentation posture and highlight the release deltas discovered for this specific version.
-- Present a backlog table covering every `pending` feature from `releases[tag_name].features`, including impact, target files, and open questions.
-- Create a discussion body that includes clearly labeled sections: **Release Overview** (tag, date, link), **Plan**, **Execution Checklist**, **Questions / Risks**, **How to Control this Workflow**, and **What Happens Next**. Reuse the control guidance from the Daily Test Improver workflow (commands such as `gh aw disable ...`, `gh aw enable ...`, `gh aw run ... --repeat <n>`, `gh aw logs ...`).
-- Use `safe-outputs.create-discussion` to publish the discussion with title `Copa Feature Sync - <tag>`, then store the resulting URL inside `${{ env.COPA_STATE_FILE }}` under `releases[tag_name].discussion_url`.
+**Purpose**: Create a discussion for the OLDEST unprocessed release so humans can review before any code changes.
+
+**Steps**:
+1. Read `${{ env.COPA_STATE_FILE }}` to see what's already been processed
+2. Sort all releases chronologically (oldest first, starting from v0.6.0)
+3. Find the FIRST release where `releases[tag_name].discussion_url` does not exist in the state file
+4. **If ALL releases already have discussions**: emit `noop` with message "All releases up to vX.Y.Z have discussions" and EXIT
+5. For the target release, analyze what features need to be added to copa-action
+6. Create a discussion with title `Copa Feature Sync - <tag>` (e.g., `Copa Feature Sync - v0.6.0`)
+7. **STOP IMMEDIATELY** after creating the discussion - do NOT proceed to Phase 2
+
+**Discussion Body Must Include**:
+- **Release Overview**: Tag, date, link to release notes
+- **Features to Implement**: Table of features with status, impact, and target files
+- **Questions / Risks**: Any uncertainties that need human input
+- **Next Steps**: "Add the `approved` label to this discussion to trigger implementation"
+
+Use `safe-outputs.create-discussion` to publish, then:
+1. Store the URL in `${{ env.COPA_STATE_FILE }}` under `releases[tag_name].discussion_url`
+2. **COMMIT the state file** to the repository so the next run knows this discussion exists
+3. Then STOP - do not proceed to Phase 2
 
 ## Backlog & State Management
 
@@ -124,19 +160,31 @@ Run this phase only when a discussion titled `Copa Feature Sync - <tag>` does no
 - When status changes, update the state file and leave a comment on the release-specific discussion so reviewers have context.
 - When all features for a release reach `done` or `blocked`, consider the release complete and note this in the discussion.
 
-## Phase 2 – Feature Delivery Loop (single feature per run)
+## Phase 2 – Feature Delivery (single feature per run)
 
-Only execute this phase when the planning discussion for the latest release already exists.
+**Trigger**: `approved` label added to a Copa Feature Sync discussion
 
-- Read the state file under `releases[tag_name].features` and the corresponding discussion checklist to find the highest-priority feature whose status is neither `done` nor `blocked`.
-- Mark that feature as `in-progress` inside `${{ env.COPA_STATE_FILE }}` before editing code.
-- Implement exclusively that feature. Update `action.yaml`, docs, and tests as required.
-- Validate your change (see Implementation Requirements) and capture evidence such as command output or links to release notes.
-- Decide which artifact to produce:
-  - Draft PR when code or docs change. Include the targeted feature item, the release tag, commands executed, validation performed, and remaining TODOs.
-  - Issue when manual intervention or other repos block progress. Describe severity in the body even though labels are pre-set.
-- Post a concise comment to the release-specific planning discussion covering the release tag processed, the feature tackled (and whether it is `done`, `blocked`, or `needs-review`), plus links to PRs/issues and test output.
-- Update the state file entry under `releases[tag_name].features` to `done` (or `blocked`) with any relevant notes, commit all changes, and exit without touching additional features.
+**Purpose**: Implement ONE feature from the approved release and create a draft PR.
+
+**Pre-condition Check**:
+- This phase ONLY runs when triggered by the `approved` label on a discussion
+- Extract the release tag from the discussion title (e.g., "Copa Feature Sync - v0.6.0" → "v0.6.0")
+- Verify this is the OLDEST release with pending features - if not, emit error and exit
+
+**Steps**:
+1. Read the state file under `releases[tag_name].features`
+2. Find the FIRST feature with status `pending` (not `done`, `blocked`, or `in-progress`)
+3. Mark that feature as `in-progress` in `${{ env.COPA_STATE_FILE }}`
+4. Implement ONLY that feature - update `action.yaml`, `entrypoint.sh`, docs, and tests as needed
+5. Run tests (`bats test/test.bats`) to validate
+6. Create a draft PR with:
+   - Title: `[copa-sync] Add <feature> from <tag>`
+   - Body: Feature description, files changed, test results, link to discussion
+7. Post a comment on the discussion with PR link and status
+8. Update the feature status to `done` (or `blocked` if issues encountered)
+9. **STOP** - do not implement additional features
+
+**Important**: If all features for this release are complete, the next scheduled run will create a discussion for the next release in chronological order.
 
 ## Implementation Requirements
 
